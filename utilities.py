@@ -1,11 +1,21 @@
 import gzip
 import pickle
 import datetime
+import argparse
 import numpy as np
 
 import torch
 import torch.nn.functional as F
 import torch_geometric
+
+def valid_seed(seed):
+    """Check whether seed is a valid seed number."""
+    seed = int(seed)
+    if seed < 0 or seed > 2**31 - 1:
+        raise argparse.ArgumentTypeError(
+                "seed must be any integer between 0 and 2**31 - 1 inclusive")
+    return seed
+
 
 def log(str, logfile=None):
     str = f'[{datetime.datetime.now()}] {str}'
