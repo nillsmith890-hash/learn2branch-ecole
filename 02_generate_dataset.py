@@ -76,7 +76,10 @@ def make_samples(in_queue, out_queue, stop_flag):
     """
     sample_counter = 0
     while not stop_flag.is_set():
-        episode, instance, seed, query_expert_prob, time_limit, out_dir = in_queue.get()
+        try:
+            episode, instance, seed, query_expert_prob, time_limit, out_dir = in_queue.get(timeout=1)
+        except queue.Empty:
+            continue
 
         scip_parameters = {'separating/maxrounds': 0, 'presolving/maxrestarts': 0,
                            'limits/time': time_limit, 'timing/clocktype': 2}
