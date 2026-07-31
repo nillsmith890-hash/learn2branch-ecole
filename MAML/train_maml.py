@@ -57,6 +57,34 @@ def meta_train_step(policy, outer_optimizer, tasks, inner_lr, inner_steps, devic
     return float(np.mean(query_losses))
 
 
+def pretrain(policy, pretrain_files, device, batch_size=128):
+    """
+    Calibrates every PreNormLayer's shift/scale via one pass of online
+    mean/variance stats collection (BaseModel.pre_train_init/pre_train/
+    pre_train_next), exactly like 03_train_gnn.py does before real training.
+
+    Skipping this leaves every PreNormLayer at its __init__ default (shift=0,
+    scale=1, i.e. identity), so raw, unnormalized MILP features go straight
+    into the GCN's Linear+ReLU stack. Combined with repeated inner-loop SGD
+    steps that's enough to blow activations up to inf/nan within a handful
+    of meta-iterations on real (larger-magnitude) data.
+    """
+    pretrain_data = GraphDataset(pretrain_files)
+    pretrain_loader = torch_geometric.loader.DataLoader(pretrain_data, batch_size, shuffle=False)
+
+    policy.pre_train_init()
+    n_layers = 0
+    while True:
+        for batch in pretrain_loader:
+            batch = batch.to(device)
+            if not policy.pre_train(batch.constraint_features, batch.edge_index, batch.edge_attr, batch.variable_features):
+                break
+        if policy.pre_train_next() is None:
+            break
+        n_layers += 1
+    return n_layers
+
+
 def meta_valid(policy, tasks, inner_lr, inner_steps, device):
     query_losses = []
 
@@ -119,13 +147,14 @@ if __name__ == '__main__':
         device = 'cuda:0'
 
     import torch
+    import torch_geometric
 
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
     L2B_DIR = os.path.dirname(CURRENT_DIR)
     sys.path.insert(0, CURRENT_DIR)
     sys.path.insert(0, L2B_DIR)
 
-    from utilities import log, valid_seed
+    from utilities import log, valid_seed, GraphDataset
     from task_sampler import TaskSampler
     from utilities_maml import load_task_batch, compute_loss, inner_loop_adapt
 
@@ -147,6 +176,13 @@ if __name__ == '__main__':
     valid_sampler = TaskSampler(data_root, args.problems, 'valid', args.k_support, args.k_query, seed=args.seed + 1)
 
     policy = GNNPolicy().to(device)
+
+    pretrain_files = []
+    for problem in args.problems:
+        pretrain_files += [f for i, f in enumerate(train_sampler.task_files[problem]) if i % 10 == 0]
+    n_layers = pretrain(policy, pretrain_files, device)
+    log(f"pretrained {n_layers} PreNormLayers on {len(pretrain_files)} samples", logfile)
+
     outer_optimizer = torch.optim.Adam(policy.parameters(), lr=args.outer_lr)
 
     best_valid_loss = np.inf
