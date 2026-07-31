@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch_geometric
@@ -35,6 +36,35 @@ def compute_loss(policy, batch, params=None):
 
     logits = pad_tensor(logits[batch.candidates], batch.nb_candidates)
     return F.cross_entropy(logits, batch.candidate_choices, reduction='mean')
+
+
+def evaluate_batch(policy, batch, params=None, top_k=(1, 3, 5, 10)):
+    """
+    Cross-entropy loss + top-k accuracy of `policy` (optionally with adapted
+    `params`, same convention as compute_loss) on `batch`, no gradients. Mirrors
+    the kacc metric 03_train_gnn.py's process() reports for the base (non-meta)
+    GCN, so MAML few-shot results are comparable to that baseline.
+    """
+    args = (batch.constraint_features, batch.edge_index, batch.edge_attr, batch.variable_features)
+    with torch.no_grad():
+        logits = policy(*args) if params is None else functional_call(policy, params, args)
+        logits = pad_tensor(logits[batch.candidates], batch.nb_candidates)
+        loss = F.cross_entropy(logits, batch.candidate_choices, reduction='mean')
+
+        true_scores = pad_tensor(batch.candidate_scores, batch.nb_candidates)
+        true_bestscore = true_scores.max(dim=-1, keepdims=True).values
+
+        kacc = []
+        for k in top_k:
+            if logits.size(-1) < k:
+                kacc.append(1.0)
+                continue
+            pred_top_k = logits.topk(k).indices
+            pred_top_k_true_scores = true_scores.gather(-1, pred_top_k)
+            acc = (pred_top_k_true_scores == true_bestscore).any(dim=-1).float().mean().item()
+            kacc.append(acc)
+
+    return loss.item(), np.array(kacc)
 
 
 def inner_loop_adapt(policy, support_batch, inner_lr, inner_steps, first_order=True):
