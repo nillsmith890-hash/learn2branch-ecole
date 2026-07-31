@@ -177,9 +177,14 @@ if __name__ == '__main__':
 
     policy = GNNPolicy().to(device)
 
+    # PreNormLayer only needs a modest sample to get stable per-feature
+    # mean/variance estimates; capping per problem keeps this fast even when
+    # each problem's train split has 1e5 samples (pre_train_next() re-scans
+    # this whole file list once per PreNormLayer, 7 times total for GNNPolicy).
+    PRETRAIN_FILES_PER_PROBLEM = 200
     pretrain_files = []
     for problem in args.problems:
-        pretrain_files += [f for i, f in enumerate(train_sampler.task_files[problem]) if i % 10 == 0]
+        pretrain_files += train_sampler.task_files[problem][:PRETRAIN_FILES_PER_PROBLEM]
     n_layers = pretrain(policy, pretrain_files, device)
     log(f"pretrained {n_layers} PreNormLayers on {len(pretrain_files)} samples", logfile)
 
