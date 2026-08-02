@@ -197,7 +197,10 @@ class GNNPolicy(BaseModel):
         variable_features = self.var_embedding(variable_features)
 
         constraint_features = self.conv_v_to_c(variable_features, reversed_edge_indices, edge_features, constraint_features)
+        constraint_features = F.relu(constraint_features)
+
         variable_features = self.conv_c_to_v(constraint_features, edge_indices, edge_features, variable_features)
+        variable_features = F.relu(variable_features)
 
         output = self.output_module(variable_features).squeeze(-1)
         return output
