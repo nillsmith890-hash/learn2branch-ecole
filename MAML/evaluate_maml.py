@@ -75,9 +75,9 @@ if __name__ == '__main__':
     for problem in args.problems:
         sampler = TaskSampler(data_root, [problem], args.split, args.k_support, args.k_query, seed=args.seed)
 
-        losses = []
-        kaccs = []
-        for _ in range(args.n_eval_tasks):
+        losses, kaccs = [], []
+        zs_losses, zs_kaccs = [], []  # zero-shot: same theta, no inner-loop adaptation at all
+        for i in range(args.n_eval_tasks):
             _, support_files, query_files = sampler.sample_task(problem)
 
             support_batch = load_task_batch(support_files, device)
@@ -88,21 +88,36 @@ if __name__ == '__main__':
             losses.append(loss)
             kaccs.append(kacc)
 
+            zs_loss, zs_kacc = evaluate_batch(policy, query_batch, params=None, top_k=top_k)
+            zs_losses.append(zs_loss)
+            zs_kaccs.append(zs_kacc)
+
+            if (i + 1) % 10 == 0:
+                print(f"  {problem}: {i + 1}/{args.n_eval_tasks} tasks done")
+
         loss_mean, loss_std = float(np.mean(losses)), float(np.std(losses))
         kacc_mean = np.mean(kaccs, axis=0)
+        zs_loss_mean = float(np.mean(zs_losses))
+        zs_kacc_mean = np.mean(zs_kaccs, axis=0)
 
-        results.append((problem, loss_mean, loss_std, kacc_mean))
+        results.append((problem, loss_mean, loss_std, kacc_mean, zs_loss_mean, zs_kacc_mean))
 
         acc_str = ' '.join(f'acc@{k}: {a:.3f}' for k, a in zip(top_k, kacc_mean))
+        zs_acc_str = ' '.join(f'acc@{k}: {a:.3f}' for k, a in zip(top_k, zs_kacc_mean))
         print(f"{problem} [{args.split}, n={args.n_eval_tasks}] "
-              f"query loss: {loss_mean:.4f} +/- {loss_std:.4f}  {acc_str}")
+              f"few-shot (adapted)  loss: {loss_mean:.4f} +/- {loss_std:.4f}  {acc_str}")
+        print(f"{problem} [{args.split}, n={args.n_eval_tasks}] "
+              f"zero-shot (no adapt) loss: {zs_loss_mean:.4f}  {zs_acc_str}")
 
     results_path = os.path.join(os.path.dirname(checkpoint), f'eval_{args.split}.csv')
     with open(results_path, 'w') as f:
         f.write('problem,split,n_eval_tasks,k_support,k_query,inner_steps,inner_lr,'
-                f"loss_mean,loss_std,{','.join(f'acc@{k}' for k in top_k)}\n")
-        for problem, loss_mean, loss_std, kacc_mean in results:
+                f"loss_mean,loss_std,{','.join(f'acc@{k}' for k in top_k)},"
+                f"zeroshot_loss_mean,{','.join(f'zeroshot_acc@{k}' for k in top_k)}\n")
+        for problem, loss_mean, loss_std, kacc_mean, zs_loss_mean, zs_kacc_mean in results:
             acc_cols = ','.join(f'{a:.6f}' for a in kacc_mean)
+            zs_acc_cols = ','.join(f'{a:.6f}' for a in zs_kacc_mean)
             f.write(f"{problem},{args.split},{args.n_eval_tasks},{args.k_support},{args.k_query},"
-                    f"{args.inner_steps},{args.inner_lr},{loss_mean:.6f},{loss_std:.6f},{acc_cols}\n")
+                    f"{args.inner_steps},{args.inner_lr},{loss_mean:.6f},{loss_std:.6f},{acc_cols},"
+                    f"{zs_loss_mean:.6f},{zs_acc_cols}\n")
     print(f"wrote {results_path}")
