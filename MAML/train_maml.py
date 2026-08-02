@@ -36,10 +36,15 @@ def meta_train_step(policy, outer_optimizer, tasks, inner_lr, inner_steps, devic
     else:
         # True (second-order) MAML: each task's adapted weights keep their
         # graph back to policy's real parameters (inner_loop_adapt was called
-        # with first_order=False), so summing the query losses and calling
-        # .backward() once differentiates through the inner loop for every
-        # task and accumulates the exact meta-gradient on policy.parameters().
-        meta_loss = 0.0
+        # with first_order=False). Call .backward() per task (scaled by
+        # 1/len(tasks)) right away instead of summing all tasks' query losses
+        # into one meta_loss and backpropping once -- gradients accumulate on
+        # policy.parameters().grad either way (autograd sums across backward
+        # calls sharing leaves), but this frees each task's inner-loop-unrolled
+        # graph before starting the next task instead of holding all
+        # meta_batch_size of them in memory at once, which is what was
+        # blowing up GPU memory.
+        outer_optimizer.zero_grad()
         for problem, support_files, query_files in tasks:
             support_batch = load_task_batch(support_files, device)
             adapted_params = inner_loop_adapt(policy, support_batch, inner_lr, inner_steps, first_order=False)
@@ -47,11 +52,8 @@ def meta_train_step(policy, outer_optimizer, tasks, inner_lr, inner_steps, devic
             query_batch = load_task_batch(query_files, device)
             q_loss = compute_loss(policy, query_batch, params=adapted_params)
             query_losses.append(q_loss.item())
-            meta_loss = meta_loss + q_loss
+            (q_loss / len(tasks)).backward()
 
-        meta_loss = meta_loss / len(tasks)
-        outer_optimizer.zero_grad()
-        meta_loss.backward()
         outer_optimizer.step()
 
     return float(np.mean(query_losses))
