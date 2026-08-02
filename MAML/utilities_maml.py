@@ -67,7 +67,7 @@ def evaluate_batch(policy, batch, params=None, top_k=(1, 3, 5, 10)):
     return loss.item(), np.array(kacc)
 
 
-def inner_loop_adapt(policy, support_batch, inner_lr, inner_steps, first_order=True):
+def inner_loop_adapt(policy, support_batch, inner_lr, inner_steps, first_order=True, max_grad_norm=10.0):
     """
     Adapts a *copy* of policy's parameters via inner_steps plain-SGD steps on
     the same support batch: theta -> theta'_i. Returns the adapted weights as
@@ -83,11 +83,22 @@ def inner_loop_adapt(policy, support_batch, inner_lr, inner_steps, first_order=T
     query loss differentiates through the inner loop itself (true MAML,
     second-order). Needs more memory/compute, but PyTorch makes it easy where
     TF1.x eager did not -- hence the flag.
+
+    Plain SGD here has no optimizer state to damp a bad step, so a large
+    inner_lr (or an unlucky support batch) can blow a step up; global-norm
+    clipping (same math as torch.nn.utils.clip_grad_norm_, done functionally
+    since these aren't real .grad tensors on nn.Parameters) keeps a single
+    step from diverging without needing per-problem inner_lr tuning.
     """
     params = OrderedDict(policy.named_parameters())
     for _ in range(inner_steps):
         loss = compute_loss(policy, support_batch, params=params)
         grads = torch.autograd.grad(loss, params.values(), create_graph=not first_order)
+
+        if max_grad_norm is not None:
+            total_norm = torch.sqrt(sum((g ** 2).sum() for g in grads))
+            clip_coef = torch.clamp(max_grad_norm / (total_norm + 1e-6), max=1.0)
+            grads = [g * clip_coef for g in grads]
 
         if first_order:
             params = OrderedDict(
