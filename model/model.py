@@ -189,6 +189,18 @@ class GNNPolicy(BaseModel):
             torch.nn.Linear(emb_size, 1, bias=False),
         )
 
+        # learn2branch/models/baseline/model.py initializes every Dense layer
+        # with K.initializers.Orthogonal() (bias defaults to 0); torch.nn.Linear's
+        # default init is Kaiming-uniform, so match the original explicitly.
+        self.apply(self._init_orthogonal)
+
+    @staticmethod
+    def _init_orthogonal(module):
+        if isinstance(module, torch.nn.Linear):
+            torch.nn.init.orthogonal_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
     def forward(self, constraint_features, edge_indices, edge_features, variable_features):
         reversed_edge_indices = torch.stack([edge_indices[1], edge_indices[0]], dim=0)
         
