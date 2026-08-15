@@ -144,7 +144,11 @@ if __name__ == "__main__":
     scheduler = Scheduler(optimizer, mode='min', patience=10, factor=0.2, verbose=True)
 
     train_files = [str(file) for file in (pathlib.Path(f'data/samples')/problem_folder/'train').glob('sample_*.pkl')]
-    pretrain_files = [f for i, f in enumerate(train_files) if i % 10 == 0]
+    # PreNormLayer only needs a modest sample for stable per-feature mean/variance
+    # estimates; pretrain_next() rescans this whole list once per PreNormLayer (7x
+    # for GNNPolicy), so "every 10th file" of a 1e5-sample train set (10k files,
+    # 70k reads total) makes epoch 0 take a very long time. Cap it.
+    pretrain_files = train_files[::10][:500]
     valid_files = [str(file) for file in (pathlib.Path(f'data/samples')/problem_folder/'valid').glob('sample_*.pkl')]
 
     pretrain_data = GraphDataset(pretrain_files)
