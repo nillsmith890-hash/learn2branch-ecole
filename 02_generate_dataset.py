@@ -75,6 +75,7 @@ def make_samples(in_queue, out_queue, stop_flag):
         A flag to tell the thread to stop.
     """
     sample_counter = 0
+    invalid_expert_counter = 0
     while not stop_flag.is_set():
         try:
             episode, instance, seed, query_expert_prob, time_limit, out_dir = in_queue.get(timeout=1)
@@ -85,8 +86,12 @@ def make_samples(in_queue, out_queue, stop_flag):
                            'limits/time': time_limit, 'timing/clocktype': 2}
         observation_function = { "scores": ExploreThenStrongBranch(expert_probability=query_expert_prob),
                                  "node_observation": ecole.observation.NodeBipartite() }
+        # StrongBranchingScores is defined on LP branching candidates.  Using
+        # pseudo candidates here can add candidates without a valid strong-
+        # branching score (NaN), which in turn makes np.argmax select an
+        # invalid expert action.
         env = ecole.environment.Branching(observation_function=observation_function,
-                                          scip_params=scip_parameters, pseudo_candidates=True)
+                                          scip_params=scip_parameters, pseudo_candidates=False)
 
         print(f"[w {threading.current_thread().name}] episode {episode}, seed {seed}, "
               f"processing instance '{instance}'...\n", end='')
@@ -107,9 +112,28 @@ def make_samples(in_queue, out_queue, stop_flag):
                                  node_observation.edge_features.values),
                                 node_observation.variable_features)
 
-            action = action_set[scores[action_set].argmax()]
+            action_set = np.asarray(action_set, dtype=np.int64)
+            candidate_scores = np.asarray(scores)[action_set]
+            finite_mask = np.isfinite(candidate_scores)
 
-            if scores_are_expert and not stop_flag.is_set():
+            # Never pass NaN/Inf to argmax.  A partially scored expert state is
+            # unsuitable as a supervised sample because the true best action
+            # among all candidates is unknown.  We can still advance the
+            # environment using the best action among the finite scores.
+            if finite_mask.any():
+                finite_actions = action_set[finite_mask]
+                finite_scores = candidate_scores[finite_mask]
+                action = finite_actions[finite_scores.argmax()]
+            else:
+                # This should be rare with LP candidates, but keep the episode
+                # moving without recording a bogus label.
+                action = action_set[0]
+
+            valid_expert_sample = scores_are_expert and finite_mask.all()
+            if scores_are_expert and not valid_expert_sample:
+                invalid_expert_counter += 1
+
+            if valid_expert_sample and not stop_flag.is_set():
                 data = [node_observation, action, action_set, scores]
                 filename = f'{out_dir}/sample_{episode}_{sample_counter}.pkl'
 
@@ -137,7 +161,8 @@ def make_samples(in_queue, out_queue, stop_flag):
                     f.write(f"Error occurred solving {instance} with seed {seed}\n")
                     f.write(f"{e}\n")
 
-        print(f"[w {threading.current_thread().name}] episode {episode} done, {sample_counter} samples\n", end='')
+        print(f"[w {threading.current_thread().name}] episode {episode} done, "
+              f"{sample_counter} samples, {invalid_expert_counter} invalid expert states skipped\n", end='')
         out_queue.put({
             'type': 'done',
             'episode': episode,
@@ -330,7 +355,7 @@ if __name__ == '__main__':
                     time_limit=time_limit)
 
     rng = np.random.RandomState(args.seed + 1)
-    collect_samples(instances_valid, out_dir + '/valid', rng, test_size,
+    collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,
                     args.njobs, query_expert_prob=node_record_prob,
                     time_limit=time_limit)
 
