@@ -297,17 +297,45 @@ if __name__ == '__main__':
         type=int,
         default=1,
     )
+    parser.add_argument(
+        '--instances-dir',
+        help='Custom task directory containing train/, valid/, and test/ LP files.',
+    )
+    parser.add_argument(
+        '--output-dir',
+        help='Custom sample output directory (required with --instances-dir).',
+    )
+    parser.add_argument('--train-size', type=int, default=100000)
+    parser.add_argument('--valid-size', type=int, default=20000)
+    parser.add_argument('--test-size', type=int, default=20000)
+    parser.add_argument('--node-record-prob', type=float, default=0.05)
+    parser.add_argument('--time-limit', type=float)
     args = parser.parse_args()
 
     print(f"seed {args.seed}")
 
-    train_size = 100000
-    valid_size = 20000
-    test_size = 20000
-    node_record_prob = 0.05
-    time_limit = 3600
+    train_size = args.train_size
+    valid_size = args.valid_size
+    test_size = args.test_size
+    node_record_prob = args.node_record_prob
+    time_limit = 3600 if args.time_limit is None else args.time_limit
 
-    if args.problem == 'setcover':
+    if min(train_size, valid_size, test_size) < 1:
+        parser.error('sample sizes must be positive')
+    if not 0 < node_record_prob <= 1:
+        parser.error('--node-record-prob must be in (0, 1]')
+    if time_limit <= 0:
+        parser.error('--time-limit must be positive')
+    if bool(args.instances_dir) != bool(args.output_dir):
+        parser.error('--instances-dir and --output-dir must be used together')
+
+    if args.instances_dir:
+        instances_train = glob.glob(os.path.join(args.instances_dir, 'train', '*.lp'))
+        instances_valid = glob.glob(os.path.join(args.instances_dir, 'valid', '*.lp'))
+        instances_test = glob.glob(os.path.join(args.instances_dir, 'test', '*.lp'))
+        out_dir = args.output_dir
+
+    elif args.problem == 'setcover':
         instances_train = glob.glob('data/instances/setcover/train_500r_1000c_0.05d/*.lp')
         instances_valid = glob.glob('data/instances/setcover/valid_500r_1000c_0.05d/*.lp')
         instances_test = glob.glob('data/instances/setcover/test_500r_1000c_0.05d/*.lp')
@@ -330,7 +358,8 @@ if __name__ == '__main__':
         instances_valid = glob.glob('data/instances/facilities/valid_100_100_5/*.lp')
         instances_test = glob.glob('data/instances/facilities/test_100_100_5/*.lp')
         out_dir = 'data/samples/facilities/100_100_5'
-        time_limit = 600
+        if args.time_limit is None:
+            time_limit = 600
 
     elif args.problem == 'mknapsack':
         instances_train = glob.glob('data/instances/mknapsack/train_100_6/*.lp')
@@ -341,6 +370,17 @@ if __name__ == '__main__':
 
     else:
         raise NotImplementedError
+
+    instances_train = sorted(instances_train)
+    instances_valid = sorted(instances_valid)
+    instances_test = sorted(instances_test)
+    for split, instances in (
+        ('train', instances_train),
+        ('valid', instances_valid),
+        ('test', instances_test),
+    ):
+        if not instances:
+            parser.error(f'no .lp files found for the {split} split')
 
     print(f"{len(instances_train)} train instances for {train_size} samples")
     print(f"{len(instances_valid)} validation instances for {valid_size} samples")
