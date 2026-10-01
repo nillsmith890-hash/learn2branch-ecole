@@ -4,6 +4,7 @@ import gzip
 import argparse
 import pickle
 import queue
+import re
 import shutil
 import threading
 import numpy as np
@@ -186,7 +187,8 @@ def make_samples(in_queue, out_queue, stop_flag, max_samples_per_episode):
 
 
 def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
-                    query_expert_prob, time_limit, max_samples_per_episode=0):
+                    query_expert_prob, time_limit, max_samples_per_episode=0,
+                    start_index=0, target_total=None):
     """
     Runs branch-and-bound episodes on the given set of instances, and collects
     randomly (state, action) pairs from the 'vanilla-fullstrong' expert
@@ -271,10 +273,15 @@ def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
 
                 # else write sample
                 else:
-                    os.rename(sample['filename'], f'{out_dir}/sample_{i+1}.pkl')
+                    os.rename(
+                        sample['filename'],
+                        f'{out_dir}/sample_{start_index+i+1}.pkl',
+                    )
                     in_buffer -= 1
                     i += 1
-                    print(f"[m {threading.current_thread().name}] {i} / {n_samples} samples written, "
+                    written = start_index + i
+                    target = target_total if target_total is not None else written
+                    print(f"[m {threading.current_thread().name}] {written} / {target} samples written, "
                           f"ep {sample['episode']} ({in_buffer} in buffer).\n", end='')
 
                     # early stop dispatcher
@@ -294,6 +301,46 @@ def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
 
     print(f"Done collecting samples for {out_dir}")
     shutil.rmtree(tmp_samples_dir, ignore_errors=True)
+
+
+def count_existing_samples(out_dir):
+    """Count a contiguous sample_1.pkl, ..., sample_N.pkl sequence."""
+    indices = []
+    for path in glob.glob(os.path.join(out_dir, 'sample_*.pkl')):
+        match = re.fullmatch(r'sample_(\d+)\.pkl', os.path.basename(path))
+        if match:
+            indices.append(int(match.group(1)))
+
+    indices.sort()
+    expected = list(range(1, len(indices) + 1))
+    if indices != expected:
+        raise RuntimeError(
+            f"cannot resume {out_dir}: sample numbering must be contiguous "
+            "from sample_1.pkl"
+        )
+    return len(indices)
+
+
+def collect_split(instances, out_dir, rng, target_size, args, time_limit):
+    """Generate a fresh split or append to its requested total size."""
+    existing = count_existing_samples(out_dir) if args.resume else 0
+    if args.resume and existing >= target_size:
+        print(f"Skipping {out_dir}: already has {existing} samples "
+              f"(target {target_size}).")
+        return
+
+    collect_samples(
+        instances,
+        out_dir,
+        rng,
+        target_size - existing,
+        args.njobs,
+        query_expert_prob=args.node_record_prob,
+        time_limit=time_limit,
+        max_samples_per_episode=args.max_samples_per_episode,
+        start_index=existing,
+        target_total=target_size,
+    )
 
 
 if __name__ == '__main__':
@@ -333,6 +380,14 @@ if __name__ == '__main__':
         type=int,
         default=0,
         help='Maximum samples from one B&B episode; 0 disables the limit.',
+    )
+    parser.add_argument(
+        '--resume',
+        action='store_true',
+        help=(
+            'Append without overwriting until each split reaches its requested '
+            'target size. Existing sample numbering must be contiguous.'
+        ),
     )
     args = parser.parse_args()
 
@@ -416,19 +471,16 @@ if __name__ == '__main__':
     os.makedirs(out_dir, exist_ok=True)
 
     rng = np.random.RandomState(args.seed)
-    collect_samples(instances_train, out_dir + '/train', rng, train_size,
-                    args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit,
-                    max_samples_per_episode=args.max_samples_per_episode)
+    collect_split(
+        instances_train, out_dir + '/train', rng, train_size, args, time_limit
+    )
 
     rng = np.random.RandomState(args.seed + 1)
-    collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,
-                    args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit,
-                    max_samples_per_episode=args.max_samples_per_episode)
+    collect_split(
+        instances_valid, out_dir + '/valid', rng, valid_size, args, time_limit
+    )
 
     rng = np.random.RandomState(args.seed + 2)
-    collect_samples(instances_test, out_dir + '/test', rng, test_size,
-                    args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit,
-                    max_samples_per_episode=args.max_samples_per_episode)
+    collect_split(
+        instances_test, out_dir + '/test', rng, test_size, args, time_limit
+    )
