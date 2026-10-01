@@ -3,6 +3,7 @@ import pickle
 import datetime
 import argparse
 import numpy as np
+from collections import OrderedDict
 
 import torch
 import torch.nn.functional as F
@@ -83,6 +84,73 @@ class GraphDataset(torch_geometric.data.Dataset):
                                   candidates, len(candidates), candidate_choice, candidate_scores)
         graph.num_nodes = constraint_features.shape[0]+variable_features.shape[0]
         return graph
+
+
+class TaskBalancedGraphDataset(GraphDataset):
+    """A concatenated graph dataset that retains per-task index ranges."""
+
+    def __init__(self, task_files):
+        if not task_files:
+            raise ValueError("task_files must contain at least one task")
+
+        self.task_files = OrderedDict()
+        self.task_indices = OrderedDict()
+        sample_files = []
+        offset = 0
+
+        for task_name, files in task_files.items():
+            files = list(files)
+            if not files:
+                raise ValueError(f"task {task_name!r} contains no sample files")
+            self.task_files[task_name] = files
+            indices = np.arange(offset, offset + len(files), dtype=np.int64)
+            self.task_indices[task_name] = indices
+            sample_files.extend(files)
+            offset += len(files)
+
+        super().__init__(sample_files)
+
+
+class TaskBalancedSampler(torch.utils.data.Sampler):
+    """Sample an equal number of graph states from every task each epoch."""
+
+    def __init__(self, task_indices, samples_per_task, seed=0):
+        if samples_per_task <= 0:
+            raise ValueError("samples_per_task must be positive")
+        if not task_indices:
+            raise ValueError("task_indices must contain at least one task")
+
+        self.task_indices = OrderedDict(
+            (name, np.asarray(indices, dtype=np.int64))
+            for name, indices in task_indices.items()
+        )
+        if any(len(indices) == 0 for indices in self.task_indices.values()):
+            raise ValueError("every task must contain at least one index")
+
+        self.samples_per_task = int(samples_per_task)
+        self.seed = int(seed)
+        self.epoch = 0
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        rng = np.random.RandomState(self.seed + self.epoch)
+        sampled = []
+        for indices in self.task_indices.values():
+            task_sample = rng.choice(
+                indices,
+                size=self.samples_per_task,
+                replace=self.samples_per_task > len(indices),
+            )
+            sampled.append(task_sample)
+
+        balanced_indices = np.concatenate(sampled)
+        rng.shuffle(balanced_indices)
+        return iter(balanced_indices.tolist())
+
+    def __len__(self):
+        return len(self.task_indices) * self.samples_per_task
 
 
 class Scheduler(torch.optim.lr_scheduler.ReduceLROnPlateau):
