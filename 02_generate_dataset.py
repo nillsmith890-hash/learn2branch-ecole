@@ -62,7 +62,7 @@ def send_orders(orders_queue, instances, seed, query_expert_prob, time_limit, ou
         episode += 1
 
 
-def make_samples(in_queue, out_queue, stop_flag):
+def make_samples(in_queue, out_queue, stop_flag, max_samples_per_episode):
     """
     Worker loop: fetch an instance, run an episode and record samples.
     Parameters
@@ -73,6 +73,9 @@ def make_samples(in_queue, out_queue, stop_flag):
         Output queue in which to send samples.
     stop_flag: threading.Event
         A flag to tell the thread to stop.
+    max_samples_per_episode : int
+        Maximum number of samples collected from one branch-and-bound episode.
+        A value of 0 disables the limit.
     """
     sample_counter = 0
     invalid_expert_counter = 0
@@ -104,6 +107,7 @@ def make_samples(in_queue, out_queue, stop_flag):
 
         env.seed(seed)
         observation, action_set, _, done, _ = env.reset(instance)
+        episode_sample_counter = 0
         while not done:
             scores, scores_are_expert = observation["scores"]
             node_observation = observation["node_observation"]
@@ -152,6 +156,14 @@ def make_samples(in_queue, out_queue, stop_flag):
                     'filename': filename,
                 })
                 sample_counter += 1
+                episode_sample_counter += 1
+
+                # Prevent a single large search tree from dominating a split.
+                # Ending the episode here also avoids spending a long time on
+                # samples that the main process will ultimately discard.
+                if (max_samples_per_episode > 0
+                        and episode_sample_counter >= max_samples_per_episode):
+                    break
 
             try:
                 observation, action_set, _, done, _ = env.step(action)
@@ -162,7 +174,9 @@ def make_samples(in_queue, out_queue, stop_flag):
                     f.write(f"{e}\n")
 
         print(f"[w {threading.current_thread().name}] episode {episode} done, "
-              f"{sample_counter} samples, {invalid_expert_counter} invalid expert states skipped\n", end='')
+              f"{episode_sample_counter} episode samples "
+              f"({sample_counter} worker total), "
+              f"{invalid_expert_counter} invalid expert states skipped\n", end='')
         out_queue.put({
             'type': 'done',
             'episode': episode,
@@ -172,7 +186,7 @@ def make_samples(in_queue, out_queue, stop_flag):
 
 
 def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
-                    query_expert_prob, time_limit):
+                    query_expert_prob, time_limit, max_samples_per_episode=0):
     """
     Runs branch-and-bound episodes on the given set of instances, and collects
     randomly (state, action) pairs from the 'vanilla-fullstrong' expert
@@ -194,6 +208,9 @@ def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
         pair.
     time_limit : float in [0, 1e+20]
         Maximum running time for an episode, in seconds.
+    max_samples_per_episode : int
+        Maximum samples contributed by one episode.  A value of 0 disables
+        the limit.
     """
     os.makedirs(out_dir, exist_ok=True)
 
@@ -218,7 +235,8 @@ def collect_samples(instances, out_dir, rng, n_samples, n_jobs,
     for i in range(n_jobs):
         p = threading.Thread(
                 target=make_samples,
-                args=(orders_queue, answers_queue, workers_stop_flag),
+                args=(orders_queue, answers_queue, workers_stop_flag,
+                      max_samples_per_episode),
                 daemon=True)
         workers.append(p)
         p.start()
@@ -310,6 +328,12 @@ if __name__ == '__main__':
     parser.add_argument('--test-size', type=int, default=20000)
     parser.add_argument('--node-record-prob', type=float, default=0.05)
     parser.add_argument('--time-limit', type=float)
+    parser.add_argument(
+        '--max-samples-per-episode',
+        type=int,
+        default=0,
+        help='Maximum samples from one B&B episode; 0 disables the limit.',
+    )
     args = parser.parse_args()
 
     print(f"seed {args.seed}")
@@ -326,6 +350,8 @@ if __name__ == '__main__':
         parser.error('--node-record-prob must be in (0, 1]')
     if time_limit <= 0:
         parser.error('--time-limit must be positive')
+    if args.max_samples_per_episode < 0:
+        parser.error('--max-samples-per-episode must be non-negative')
     if bool(args.instances_dir) != bool(args.output_dir):
         parser.error('--instances-dir and --output-dir must be used together')
 
@@ -392,14 +418,17 @@ if __name__ == '__main__':
     rng = np.random.RandomState(args.seed)
     collect_samples(instances_train, out_dir + '/train', rng, train_size,
                     args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit)
+                    time_limit=time_limit,
+                    max_samples_per_episode=args.max_samples_per_episode)
 
     rng = np.random.RandomState(args.seed + 1)
     collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,
                     args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit)
+                    time_limit=time_limit,
+                    max_samples_per_episode=args.max_samples_per_episode)
 
     rng = np.random.RandomState(args.seed + 2)
     collect_samples(instances_test, out_dir + '/test', rng, test_size,
                     args.njobs, query_expert_prob=node_record_prob,
-                    time_limit=time_limit)
+                    time_limit=time_limit,
+                    max_samples_per_episode=args.max_samples_per_episode)
