@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--inner-steps", type=int, default=5)
     parser.add_argument("--inner-lr", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--gpu", type=int, default=-1, help="GPU ID, or -1 for CPU (default)")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.support_size <= 0 or args.inner_steps <= 0 or args.inner_lr <= 0:

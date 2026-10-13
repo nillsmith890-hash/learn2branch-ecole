@@ -142,7 +142,7 @@ def main():
     parser.add_argument("--seed", action="append", type=int, dest="seeds")
     parser.add_argument("--time-limit", type=float, default=60)
     parser.add_argument("--include-relpscost", action="store_true")
-    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--gpu", type=int, default=-1, help="GPU ID, or -1 for CPU (default)")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.limit_instances <= 0 or args.time_limit <= 0:

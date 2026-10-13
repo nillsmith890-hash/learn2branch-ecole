@@ -138,6 +138,9 @@ new scripts to the training machine. The support set comes only from each
 held-out task's `valid` split; both checkpoints receive exactly the same 32
 samples and five gradient steps. The fixed-validation Reptile checkpoint is
 used, not the earlier random-validation pilot.
+The commands below use CPU inference (`--gpu -1`) so they can run on a
+CPU-oriented server. Keep all compared policies on the same server under
+similar load; solver wall times from different machines are not comparable.
 
 First, generate three new test LPs per auction configuration. Zero-sized
 train/valid splits are allowed by `01_generate_instances_meta.py` for this
@@ -165,7 +168,7 @@ python meta_learning/adapt_for_online.py \
   --task cauctions/50_250 --task cauctions/75_375 \
   --data-root data/samples_meta \
   --support-size 32 --inner-steps 5 --inner-lr 0.01 \
-  --seed 0 --gpu 0 \
+  --seed 0 --gpu -1 \
   --output-dir model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot
 ```
 
@@ -183,7 +186,7 @@ python meta_learning/evaluate_online.py \
   --checkpoint cauctions/75_375:reptile=model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/cauctions/75_375/reptile_adapted.pkl \
   --instances-root data/instances_online_pilot \
   --limit-instances 3 --seed 0 --time-limit 60 \
-  --include-relpscost --gpu 0 \
+  --include-relpscost --gpu -1 \
   --output model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/solve_results.csv
 ```
 
