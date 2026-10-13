@@ -141,6 +141,9 @@ used, not the earlier random-validation pilot.
 The commands below use CPU inference (`--gpu -1`) so they can run on a
 CPU-oriented server. Keep all compared policies on the same server under
 similar load; solver wall times from different machines are not comparable.
+The online evaluator calls Ecole's `as_pyscipopt()` to read SCIP statistics,
+so the CPU server must also have the real `pyscipopt` installed in the same
+environment as Ecole. The repository's `pyscipopt_stub` is not sufficient.
 
 First, generate three new test LPs per auction configuration. Zero-sized
 train/valid splits are allowed by `01_generate_instances_meta.py` for this

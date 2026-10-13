@@ -173,6 +173,18 @@ def main():
     device = "cpu" if args.gpu == -1 else "cuda:0"
     import ecole
     import torch
+    try:
+        import pyscipopt
+    except ModuleNotFoundError as exc:
+        if exc.name != "pyscipopt":
+            raise
+        parser.error(
+            "PySCIPOpt is required for SCIP result metrics. Install it in the "
+            "same environment as Ecole (for a conda-forge environment: "
+            "conda install -c conda-forge pyscipopt)."
+        )
+    if not hasattr(pyscipopt, "Model"):
+        parser.error("a real PySCIPOpt installation is required; pyscipopt_stub is insufficient")
 
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "model"))
