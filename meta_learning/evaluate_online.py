@@ -67,7 +67,11 @@ def solve_gnn(ecole, torch, model, path, device, seed, scip_parameters):
         )
         with torch.no_grad():
             logits = model(*features)
-            candidate_indices = torch.as_tensor(action_set, device=device, dtype=torch.long)
+            # Ecole can return uint64 candidates, which PyTorch cannot ingest
+            # directly as an index tensor. Variable indices fit in int64.
+            candidate_indices = torch.from_numpy(
+                action_set.astype(np.int64, copy=False)
+            ).to(device)
             choice = int(torch.argmax(logits[candidate_indices]).item())
         observation, action_set, _, done, _ = env.step(int(action_set[choice]))
     return env, time.perf_counter() - start
