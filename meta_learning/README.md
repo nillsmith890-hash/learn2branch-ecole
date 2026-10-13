@@ -67,3 +67,30 @@ Compare three values on exactly the same query episodes:
 
 Reptile is useful only if the third result consistently improves on the second.
 
+## Paired checkpoint comparison
+
+The two summary CSVs above do not preserve episode-level differences. For a
+direct comparison on exactly the same support/query episodes, run:
+
+```bash
+python meta_learning/evaluate_paired.py \
+  --baseline-checkpoint model/pooled/lodo_cauctions_5k/0/train_params.pkl \
+  --reptile-checkpoint model/meta_learning/reptile_lodo_cauctions_5k/0/best_params.pkl \
+  --task cauctions/50_250 \
+  --task cauctions/75_375 \
+  --support-size 32 \
+  --query-size 100 \
+  --inner-steps 5 \
+  --inner-lr 0.01 \
+  --episodes 100 \
+  --seed 0 \
+  --gpu 0 \
+  --output model/meta_learning/reptile_lodo_cauctions_5k/0/eval_paired.csv
+```
+
+The script saves one row per episode and a separate `eval_paired_summary.csv`.
+Reported differences are Reptile minus LODO; positive acc@1 is better. The
+bootstrap intervals resample episodes within each task and can be optimistic
+when different episodes reuse source MILP instances. This is a diagnostic,
+not a new held-out dataset or a basis for tuning on the test split.
+
