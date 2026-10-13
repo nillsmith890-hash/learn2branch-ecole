@@ -1,6 +1,7 @@
 """Train a Reptile initialization across parameterized MILP tasks."""
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -33,6 +34,10 @@ def parse_args():
     parser.add_argument("--meta-step-size", type=float, default=0.1)
     parser.add_argument("--valid-every", type=int, default=20)
     parser.add_argument("--valid-episodes", type=int, default=8)
+    parser.add_argument(
+        "--valid-episodes-per-task", type=int,
+        help="use a fixed, balanced validation bank with this many episodes per task",
+    )
     parser.add_argument("--pretrain-samples-per-task", type=int, default=50)
     parser.add_argument("--initial-checkpoint", type=Path)
     args = parser.parse_args()
@@ -44,6 +49,8 @@ def parse_args():
                  "pretrain_samples_per_task"):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
+    if args.valid_episodes_per_task is not None and args.valid_episodes_per_task <= 0:
+        parser.error("--valid-episodes-per-task must be positive")
     return args
 
 
@@ -83,6 +90,19 @@ def main():
     valid_sampler = TaskEpisodeSampler(
         args.data_root, args.tasks, "valid", args.support_size, args.query_size, args.seed + 1
     )
+    fixed_valid_episodes = None
+    valid_metrics_file = output_dir / "valid_metrics.csv"
+    if args.valid_episodes_per_task is not None:
+        fixed_valid_episodes = {
+            task: [valid_sampler.sample_task(task) for _ in range(args.valid_episodes_per_task)]
+            for task in args.tasks
+        }
+        (output_dir / "validation_episodes.json").write_text(
+            json.dumps(fixed_valid_episodes, indent=2)
+        )
+        with valid_metrics_file.open("w", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(("iteration", "task", "loss", "acc@1"))
     policy = GNNPolicy().to(device)
     if args.initial_checkpoint:
         policy.load_state_dict(torch.load(args.initial_checkpoint, map_location=device))
@@ -102,6 +122,12 @@ def main():
 
     log(f"device: {device} (requested gpu {args.gpu})", logfile)
     log(f"tasks: {args.tasks}", logfile)
+    if fixed_valid_episodes is not None:
+        log(
+            f"fixed validation: {args.valid_episodes_per_task} episodes per task; "
+            "checkpoint selection uses the macro-average across tasks",
+            logfile,
+        )
     best_loss = float("inf")
     checkpoint = output_dir / "best_params.pkl"
 
@@ -127,14 +153,31 @@ def main():
             f"acc@1: {train_mean['acc@1']:.3f}", logfile)
 
         if iteration % args.valid_every == 0:
-            results = []
-            for _ in range(args.valid_episodes):
-                episode = valid_sampler.sample_task()
-                support = load_batch(episode["support_files"], device)
-                adapted = adapt(policy, support, args.inner_lr, args.inner_steps)
-                query = load_batch(episode["query_files"], device)
-                results.append(evaluate(policy, query, adapted))
-            valid_mean = mean_metrics(results)
+            if fixed_valid_episodes is None:
+                episodes_by_task = {"pooled": [
+                    valid_sampler.sample_task() for _ in range(args.valid_episodes)
+                ]}
+            else:
+                episodes_by_task = fixed_valid_episodes
+            task_means = {}
+            for task, episodes in episodes_by_task.items():
+                results = []
+                for episode in episodes:
+                    support = load_batch(episode["support_files"], device)
+                    adapted = adapt(policy, support, args.inner_lr, args.inner_steps)
+                    query = load_batch(episode["query_files"], device)
+                    results.append(evaluate(policy, query, adapted))
+                task_means[task] = mean_metrics(results)
+            valid_mean = {
+                metric: float(np.mean([result[metric] for result in task_means.values()]))
+                for metric in next(iter(task_means.values()))
+            }
+            if fixed_valid_episodes is not None:
+                with valid_metrics_file.open("a", newline="") as stream:
+                    writer = csv.writer(stream)
+                    for task, result in task_means.items():
+                        writer.writerow((iteration, task, result["loss"], result["acc@1"]))
+                    writer.writerow((iteration, "MACRO", valid_mean["loss"], valid_mean["acc@1"]))
             log(f"ITER {iteration} VALID query loss: {valid_mean['loss']:.6f} "
                 f"acc@1: {valid_mean['acc@1']:.3f}", logfile)
             if valid_mean["loss"] < best_loss:
