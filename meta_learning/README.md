@@ -130,3 +130,73 @@ the held-out cauctions test split is not used for checkpoint selection. The
 older `--valid-episodes` option remains available for reproducing the original
 random-validation pilot, but should not be used for this follow-up.
 
+## Online SCIP pilot on new auction instances
+
+This is a *new* test: do not solve the LPs that produced the offline support
+samples. Run the following commands from the repository root after syncing the
+new scripts to the training machine. The support set comes only from each
+held-out task's `valid` split; both checkpoints receive exactly the same 32
+samples and five gradient steps. The fixed-validation Reptile checkpoint is
+used, not the earlier random-validation pilot.
+
+First, generate three new test LPs per auction configuration. Zero-sized
+train/valid splits are allowed by `01_generate_instances_meta.py` for this
+purpose. Its overwrite guard will reject an existing test directory; use a
+new output root if rerunning.
+
+```bash
+python 01_generate_instances_meta.py cauctions \
+  --n-items 50 --n-bids 250 --seed 20261013 \
+  --train-instances 0 --valid-instances 0 --test-instances 3 \
+  --output-root data/instances_online_pilot
+
+python 01_generate_instances_meta.py cauctions \
+  --n-items 75 --n-bids 375 --seed 20261014 \
+  --train-instances 0 --valid-instances 0 --test-instances 3 \
+  --output-root data/instances_online_pilot
+```
+
+Then create task-specific adapted weights and a support-file manifest:
+
+```bash
+python meta_learning/adapt_for_online.py \
+  --baseline-checkpoint model/pooled/lodo_cauctions_5k/0/train_params.pkl \
+  --reptile-checkpoint model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/best_params.pkl \
+  --task cauctions/50_250 --task cauctions/75_375 \
+  --data-root data/samples_meta \
+  --support-size 32 --inner-steps 5 --inner-lr 0.01 \
+  --seed 0 --gpu 0 \
+  --output-dir model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot
+```
+
+Finally, solve each new LP with LODO-adapted, Reptile-adapted, and SCIP's
+`relpscost` brancher under the same solver parameters and seed. The 60-second
+time limit keeps this first check small. Results are flushed to CSV after each
+solve, so completed rows survive an interruption.
+
+```bash
+python meta_learning/evaluate_online.py \
+  --task cauctions/50_250 --task cauctions/75_375 \
+  --checkpoint cauctions/50_250:lodo=model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/cauctions/50_250/lodo_adapted.pkl \
+  --checkpoint cauctions/50_250:reptile=model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/cauctions/50_250/reptile_adapted.pkl \
+  --checkpoint cauctions/75_375:lodo=model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/cauctions/75_375/lodo_adapted.pkl \
+  --checkpoint cauctions/75_375:reptile=model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/cauctions/75_375/reptile_adapted.pkl \
+  --instances-root data/instances_online_pilot \
+  --limit-instances 3 --seed 0 --time-limit 60 \
+  --include-relpscost --gpu 0 \
+  --output model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/solve_results.csv
+```
+
+Compare matched rows on `task`, `instance`, and `seed`. First check solved
+status and gap, then nodes and time; do not treat an unsolved run's time limit
+as a normal solve time. If the pilot works, run a separate, larger confirmatory
+set with fresh instances and seeds. Do not tune Reptile using these held-out
+auction outcomes.
+
+The evaluator also writes a compact `solve_results_summary.csv`. To share the
+pilot result without pasting the full per-solve CSV:
+
+```bash
+cat model/meta_learning/reptile_lodo_cauctions_5k_fixedval/0/online_pilot/solve_results_summary.csv
+```
+

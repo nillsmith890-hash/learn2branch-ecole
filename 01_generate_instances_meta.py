@@ -38,8 +38,12 @@ def task_name(args):
 
 def validate_args(args):
     for split, count in vars(args).items():
-        if split.endswith("_instances") and count < 1:
-            raise ValueError(f"--{split.replace('_', '-')} must be positive")
+        if split.endswith("_instances") and count < 0:
+            raise ValueError(f"--{split.replace('_', '-')} must be nonnegative")
+    if not any(
+        getattr(args, f"{split}_instances") > 0 for split in ("train", "valid", "test")
+    ):
+        raise ValueError("at least one split must contain an instance")
 
     if args.problem == "cauctions":
         if args.n_items < 2 or args.n_bids < 1:
@@ -129,7 +133,10 @@ def main():
         "test": args.test_instances,
     }
 
-    existing = [task_dir / split for split in split_sizes if (task_dir / split).exists()]
+    existing = [
+        task_dir / split for split, count in split_sizes.items()
+        if count and (task_dir / split).exists()
+    ]
     if existing:
         paths = ", ".join(str(path) for path in existing)
         raise FileExistsError(
@@ -142,6 +149,8 @@ def main():
     print(f"seed: {args.seed}")
 
     for split, count in split_sizes.items():
+        if count == 0:
+            continue
         split_dir = task_dir / split
         split_dir.mkdir(parents=True)
         print(f"{split}: generating {count} instances in {split_dir}")

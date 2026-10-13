@@ -132,3 +132,7 @@ dmypy.json
 
 # Local experiment reports
 exp_log/
+
+# Online SCIP pilot artifacts (generated LPs, adapted weights, result CSVs)
+/data/instances_online_pilot/
+/model/meta_learning/*/*/online_pilot/
